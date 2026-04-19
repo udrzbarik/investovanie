@@ -5,6 +5,7 @@ title: "Investovanie"
 ```{r}
 library(tidyverse)
 library(jsonlite)
+library(lubridate)
 
 options(digits = 10)
 ```
@@ -40,7 +41,8 @@ gold = read_delim(
     date = `NAV date`,
     value = `ETC value`,
     underlying_value = `Underlying`
-  )
+  ) %>%
+  mutate(date = parse_date_time(date, "dmy"))
 
 
 # REITs Global Real Estate ETF - reits.json
@@ -51,7 +53,10 @@ reits = fromJSON("./data/reits.json", flatten = TRUE) %>%
     value = `value.localized`,
   ) %>%
   select(date, value) %>%
-  mutate(value = as.numeric(value))
+  mutate(
+    value = as.numeric(value),
+    date = parse_date_time(date, "ymd")
+  )
 
 
 # Corporate European Bonds ETF - bonds.csv
@@ -66,7 +71,8 @@ bonds = read_delim(
     date = `As Of`,
     value = NAV
   ) %>%
-  select(date, value)
+  select(date, value) %>%
+  mutate(date = parse_date_time(date, 'dmy'))
 
 
 # World Value Factor Equities ETF - equity.json
@@ -77,5 +83,16 @@ equity = fromJSON("./data/equity.json", flatten = TRUE) %>%
     value = `value.localized`,
   ) %>%
   select(date, value) %>%
-  mutate(value = as.numeric(value))
+  mutate(
+    value = as.numeric(value),
+    date = parse_date_time(date, "ymd")
+  )
+
+portfolio <- bonds %>%
+  head(-1) %>% # Vráti všetko okrem posledného riadku
+  select(date, bonds_val = value) %>%
+  # Joiny eliminuju prebytočne rows
+  inner_join(equity %>% select(date, equity_val = value), by = "date") %>%
+  inner_join(gold %>% select(date, gold_val = value), by = "date") %>%
+  inner_join(reits %>% select(date, reits_val = value), by = "date")
 ```
