@@ -19,13 +19,11 @@ Cieľom seminárnej práce, je zostaviť pre nášho investora portfólio ktoré
 Pre tento účel sme vybrali ako potenciálnych kandidátov nasledovné aktíva:
 
 1.  [**Zlato (ETC)**](https://etf.dws.com/en-lu/etc/DE000A1EK0G3-xtrackers-physical-gold-eur-hedged-etc/)- ako safe haven, by malo zabezpečiť svojou potenciálne inverznou koreláciou tzv. hedge oproti prepadu ostatných zložiek portfólia.
-2.  [**REITs (ETF)**](https://www.vaneck.com/it/en/investments/real-estate-etf/overview/)- by mali slúžiť na expozíciu sektoru nehnuteľností prostredníctvom Real Estate Investment Trust vehiclov, ktoré držia a investujú do fyzických nehnutelností, no obchodujú sa s likviditou akcií na trhu
+2.  [**REITs (ETF)**](https://www.vaneck.com/it/en/investments/real-estate-etf/overview/)- by mali slúžiť na expozíciu sektoru nehnuteľností prostredníctvom Real Estate Investment Trust vehiclov, ktoré držia a investujú do fyzických nehnutelností, no obchodujú sa s likviditou akcií na trhu.
 3.  [**Dlhopisy (ETF)**](https://www.ishares.com/uk/individual/en/products/290618/ishares-high-yield-corp-bond-ucits-etf)- poskytnú expozíciu tzv. fixed income, ktorý je jeden z rovnako populárnych investičným aktív. Z dôvodu vyššej kapacity rizika, no iba averzii voči riziku spojeným s akciami budeme voliť korporátne dlhopisové ETF.
-4.  [**Akcie (ETF)**](https://www.ishares.com/uk/individual/en/products/270048/ishares-msci-world-value-factor-ucits-etf) **-** volíme v tomto prípade ako najmenšiu zložku. Zameriavame sa na všeobecný index akcií, ktorý je dobre diverzifikovaný. S cieľom mitigovať riziko a expozíciu na USA volíme faktorový variant svetového indexu, ktorý nemá kompozíciu stanovenú na základe Market Capu, no skôr sa jedná o podhodnotené - hodnotové tituly, čo do istej miery môže limitovať aj volatilitu tohto aktíva oproti klasickému World ETF.
+4.  [**Akcie (ETF)**](https://www.ishares.com/uk/individual/en/products/270048/ishares-msci-world-value-factor-ucits-etf) - volíme v tomto prípade ako najmenšiu zložku. Zameriavame sa na všeobecný index akcií, ktorý je dobre diverzifikovaný. S cieľom mitigovať riziko a expozíciu na USA volíme faktorový variant svetového indexu, ktorý nemá kompozíciu stanovenú na základe Market Capu, no skôr sa jedná o podhodnotené - hodnotové tituly, čo do istej miery môže limitovať aj volatilitu tohto aktíva oproti klasickému World ETF.
 
-### Stanovenie váh
-
-Na stanovenie váh v rámci nášho portfólia využijeme Markowitzovú metódu mean-variance, ktorá nám na základe nášho cieľového (mean) výnosu pomocou kvadratickej optimalizácie vytvorí portfólio, ktoré bude mať najnižšiu možnú mieru rizika (varianciu).
+#### Import historických dát o aktívach
 
 ```{r}
 
@@ -95,4 +93,9 @@ portfolio <- bonds %>%
   inner_join(equity %>% select(date, equity_val = value), by = "date") %>%
   inner_join(gold %>% select(date, gold_val = value), by = "date") %>%
   inner_join(reits %>% select(date, reits_val = value), by = "date")
+
 ```
+
+### Stanovenie váh
+
+Na stanovenie váh v rámci nášho portfólia využijeme Markowitzovú metódu mean-variance, ktorá nám na základe nášho cieľového (mean) výnosu pomocou kvadratickej optimalizácie vytvorí portfólio, ktoré bude mať najnižšiu možnú mieru rizika (varianciu).
