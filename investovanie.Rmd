@@ -115,8 +115,10 @@ returns <- portfolio %>%
   ) %>%
   drop_na()
 
+
 # Trading days
 ann <- 252
+
 
 # Summary of each asset
 stats <- returns %>%
@@ -135,6 +137,7 @@ stats <- returns %>%
     .groups     = "drop"
   )
 
+
 # Returns matrix
 ret_matrix <- returns %>%
   select(bonds_ret, equity_ret, gold_ret, reits_ret) %>%
@@ -146,6 +149,7 @@ cov_annual   <- cov_daily * ann
 
 print(stats)
 print(round(cov_annual, 6))
+
 ```
 
 #### Markowitzová mean-variance metóda stanovenia váh
