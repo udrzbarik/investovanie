@@ -99,3 +99,53 @@ portfolio <- bonds %>%
 ### Stanovenie váh
 
 Na stanovenie váh v rámci nášho portfólia využijeme Markowitzovú metódu mean-variance, ktorá nám na základe nášho cieľového (mean) výnosu pomocou kvadratickej optimalizácie vytvorí portfólio, ktoré bude mať najnižšiu možnú mieru rizika (varianciu).
+
+#### Deskriptívne štatistiky portfólia
+
+```{r}
+
+# Log returns for each day
+returns <- portfolio %>%
+  arrange(date) %>%
+  mutate(
+    bonds_ret  = log(bonds_val  / lag(bonds_val)),
+    equity_ret = log(equity_val / lag(equity_val)),
+    gold_ret   = log(gold_val   / lag(gold_val)),
+    reits_ret  = log(reits_val  / lag(reits_val))
+  ) %>%
+  drop_na()
+
+# Trading days
+ann <- 252
+
+# Summary of each asset
+stats <- returns %>%
+  select(ends_with("_ret")) %>%
+  pivot_longer(everything(), names_to = "asset", values_to = "ret") %>%
+  mutate(asset = str_remove(asset, "_ret")) %>%
+  group_by(asset) %>%
+  summarise(
+    mean_daily  = mean(ret),
+    sd_daily    = sd(ret),
+    mean_annual = mean_daily * ann,
+    sd_annual   = sd_daily  * sqrt(ann),
+    sharpe      = mean_annual / sd_annual,
+    skewness    = (mean((ret - mean(ret))^3)) / (sd(ret)^3),
+    kurtosis    = (mean((ret - mean(ret))^4)) / (sd(ret)^4),
+    .groups     = "drop"
+  )
+
+# Returns matrix
+ret_matrix <- returns %>%
+  select(bonds_ret, equity_ret, gold_ret, reits_ret) %>%
+  as.matrix()
+
+# Covariance matrix
+cov_daily    <- cov(ret_matrix)
+cov_annual   <- cov_daily * ann
+
+print(stats)
+print(round(cov_annual, 6))
+```
+
+#### Markowitzová mean-variance metóda stanovenia váh
