@@ -6,6 +6,7 @@ title: "Investovanie"
 library(tidyverse)
 library(jsonlite)
 library(lubridate)
+library(quadprog)
 
 options(digits = 10)
 ```
@@ -19,10 +20,17 @@ Cieľom seminárnej práce, je zostaviť pre nášho investora portfólio ktoré
 Pre tento účel sme vybrali ako potenciálnych kandidátov nasledovné aktíva:
 
 1.  **Physical Gold EUR Hedged (ETC)** - ako safe haven, by malo zabezpečiť svojou potenciálne inverznou koreláciou tzv. hedge oproti prepadu ostatných zložiek portfólia.
+
 2.  **Global Real Estate (ETF)** - by mali slúžiť na expozíciu sektoru nehnuteľností prostredníctvom Real Estate Investment Trust vehiclov, ktoré držia a investujú do fyzických nehnutelností, no obchodujú sa s likviditou akcií na trhu.
-3.  **High Yield Corp Bonds (ETF)** - poskytnú expozíciu tzv. fixed income, ktorý je jeden z rovnako populárnych investičným aktív. Z dôvodu vyššej kapacity rizika, no iba averzii voči riziku spojeným s akciami budeme voliť korporátne dlhopisové ETF. Napriek high yield klasifikácii vykazujú tieto dlhopisy konzervatívnu volatilitu, čo ich robí efektívnym zdrojom výnosu v rámci nášho konzervatívneho portfólia. Investora by sme však mali oboznámiť s ich potenciálne vyššou koreláciou s akciovým trhom v krízových obdobiach.
+
+3.  **High Yield Corp Bonds (ETF)** - poskytnú expozíciu tzv. fixed income, ktorý je jeden z rovnako populárnych investičným aktív. Z dôvodu vyššej kapacity rizika, no iba averzii voči riziku spojeným s akciami budeme voliť korporátne dlhopisové ETF.
+
+    Napriek high yield klasifikácii vykazujú tieto dlhopisy konzervatívnu volatilitu, čo ich robí efektívnym zdrojom výnosu v rámci nášho konzervatívneho portfólia. Jediná limitácia pre nášho investora je potenciálne vyššia korelácia s akciovým trhom v krízových obdobiach a teda vyššia variancia ($\sigma$).
+
 4.  **Inflation Linked Govt Bond (ETF)** - ekvivalent US TIPS ktoré by mali obsahovať dlhopisy ktoré sú tzv. inflation protected.
+
 5.  **Edge MSCI World Value Factor (ETF)** - volíme v tomto prípade ako najmenšiu zložku. Zameriavame sa na všeobecný index akcií, ktorý je dobre diverzifikovaný. S cieľom mitigovať riziko a expozíciu na USA volíme faktorový variant svetového indexu, ktorý nemá kompozíciu stanovenú na základe Market Capu, no skôr sa jedná o podhodnotené - hodnotové tituly, čo do istej miery môže limitovať aj volatilitu tohto aktíva oproti klasickému World ETF.
+
 6.  **Longer Dated All Commodities (ETF)** - Jeho konstituenty zastupujú nasledujúce komoditné sektory: energetika, drahé kovy, priemyselné kovy, chov hospodárskych zvierat a poľnohospodárstvo. Tieto aktíva rastú s infláciou a teda je možné od nich čakať proti-inflačný efekt.
 
 #### Import historických dát o aktívach
@@ -189,8 +197,6 @@ print(round(cov_annual, 6))
 #### Markowitzová mean-variance metóda stanovenia váh
 
 ```{r}
-library(quadprog)
-
 
 # Assets
 asset_order <- c("bonds", "com", "equity", "gold", "reits", "tips")
@@ -211,7 +217,9 @@ n <- length(mu)
 
 # Limity
 target_return <- 0.07
-Rf            <- 0.0215
+
+# https://nbs.sk/statisticke-udaje/financne-trhy/urokove-sadzby/urokove-sadzby-ecb/
+Rf <- 0.0215 
 
 # Named vector
 upper_bounds <- c(bonds = 1, com = 1, equity = 0.1,
@@ -219,15 +227,23 @@ upper_bounds <- c(bonds = 1, com = 1, equity = 0.1,
 
 upper_bounds <- upper_bounds[asset_order]
 
-A_eq    <- cbind(mu, rep(1, n))
-b_eq    <- c(target_return, 1)
+A_eq <- cbind(
+  mu,              # (mu_1*w_1, mu_2*w_2, .. mu_n*w_n) matica výnosov * váhy
+  rep(1, n)        # (1*w_1, 1*w_2, .. 1*w_n) matica váhy * 1
+)
 
-A_lower <- diag(n)
-b_lower <- rep(0, n)                        
+b_eq    <- c(
+  target_return,   # sa musí rovnať cieľovému výnosu
+  1                # suma sa musí rovnať 1
+)
 
-A_upper <- -diag(n)
-b_upper <- -upper_bounds
+A_lower <- diag(n)      # Jednotlivé váhy aktív
+b_lower <- rep(0, n)    # sú rovné, alebo väčšie nule                       
 
+A_upper <- -diag(n)         # Jednotlivé váhy aktív
+b_upper <- -upper_bounds    # sú -väčšie (menšie), alebo rovné limitom z hora
+
+# Spojenie podmienok dokopy
 Amat <- cbind(A_eq, A_lower, A_upper)
 bvec <- c(b_eq, b_lower, b_upper)
 
@@ -259,4 +275,25 @@ cat("\n--- Portfolio statistics ---\n")
 cat(sprintf("Expected annual return : %.4f (%.2f%%)\n", port_return, port_return * 100))
 cat(sprintf("Annual std deviation   : %.4f (%.2f%%)\n", port_sd,     port_sd     * 100))
 cat(sprintf("Sharpe ratio (Rf=%.3f): %.4f\n",           Rf,          port_sharpe))
+
 ```
+
+#### Choleskyho dekompozícia
+
+Napriek tomu, že Monte Carlo simulácie sú často využívným a uznávaným nástrojom vo financiách, je dôležité prihliadať aj na jeho limitácie v prípade použitia out of the box. Monte Carlo simulácia per-se spočíva iba v generovaní náhodných dát na základe istého (často normálneho normovaného) rozdelenia. Toto je ale veľmi hrubá aproximácia reality finančných trhov, ktorej by sme sa chceli čo najdôvernejšie v našich simuláciach priblížiť.
+
+To vieme docieliť pomocou výsledku Choleskyho dekompozície matice. Z tejto dekompozície dostaneme tzv. Choleskyho most. Táto dekompozícia nám hovorí že každá kladne definitná matica $A$ sa dá napísať v nasledovnom tvare.
+
+$$
+A=\textbf{L}\cdot\text{L}^T
+$$
+
+Kde $L$ je dolná trojuholníková matica (tzv. Choleského faktor). Ak tento postup aplikujeme na kovariačnú maticu $\Sigma$, dostaneme že $\Sigma = LL^T$. Hlavný význam tohto rozkladu v štatistike a simuláciách (napr. naše Monte Carlo) spočíva v schopnosti vniesť závislosť - korelačnú štruktúru - do nezávislých premenných.
+
+$$
+Y=\textbf{L}\cdot Z
+$$
+
+Predpokladajme, že máme vektor $Z$, ktorý obsahuje náhodne vygenerované trhové dáta z normovaného normálneho rozdelenia (dáta sú teda nekorelované, s nulovou strednou hodnotou a jednotkovým rozptylom). Ak tento vektor prenásobíme maticou $L$, získame nový vektor premenných $Y$. Týmto násobením do pôvodne nezávislých vzoriek "vložíme" závislosť z našich pôvodných dát a teda sa priblížime k realite v našej simulácií[^1]. Výsledkom našej snahy je nakoniec transformácia bieleho šumu na dáta, ktoré rešpektujú historické vzťahy medzi aktívami.
+
+[^1]: Ak by ste potrebovali zdroje, z tadialto som čerpal ja do istej miery - [SIMULOVANIE DÁT Z ROZDELENÍ – BAKALÁRSKA PRÁCA, Mátyás Varga, 2014](http://www.iam.fmph.uniba.sk/efm/bakalarky/2014/varga/bakalarka.pdf "SIMULOVANIE DÁT Z ROZDELENÍ – BAKALÁRSKA PRÁCA, Mátyás Varga, 2014"){.uri}
