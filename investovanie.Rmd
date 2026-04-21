@@ -196,6 +196,31 @@ print(round(cov_annual, 6))
 
 #### Markowitzová mean-variance metóda stanovenia váh
 
+Markowitzova moderná teória portfólia (MPT)[^1] nám dáva možnosť, ako tieto nami vybrané aktíva optimálne kombinovať. Základným cieľom je nájsť takú kombináciu váh aktív, ktorá **minimalizuje riziko pre danú úroveň očakávaného výnosu.**
+
+Predpokladajme portfólio s $n$ aktívami, vektorom váh $w$, vektorom očakávaných výnosov $\mu$ a kovariančnou maticou $\Sigma$.
+
+[^1]: <https://sites.math.washington.edu/~burke/crs/408/fin-proj/mark1.pdf>
+
+-   Očakávaný výnos portfólia: $E(R_p) = w^T \mu$
+
+-   Riziko portfólia (rozptyl): $\sigma_p^2 = w^T \Sigma w$
+
+V klasickom modeli hľadáme váhy $w$ riešením problému kvadratického programovania.
+
+$$
+\min_{w} \frac{1}{2} w^T \Sigma w
+$$
+**Za podmienok:**
+
+1\. $\sum_{i=1}^{n} w_i = 1$ (plná investícia kapitálu)
+2. $w^T \mu = \mu_{target}$ (dosiahnutie cieľového výnosu)
+3. $w_i \geq 0$ (zákaz predajov nakrátko)
+
+**Efektívna hranica (Efficient Frontier)**
+
+Množina všetkých optimálnych portfólií vytvára v grafe (riziko vs. výnos) tzv. efektívnu hranicu. Portfóliá na tejto krivke ponúkajú najlepší možný pomer medzi rizikom a výnosom. Kľúčovým faktorom je tu **diverzifikácia** – vďaka tomu, že aktíva nie sú dokonale korelované, celkové riziko portfólia je nižšie než priemer rizík jednotlivých aktív.
+
 ```{r}
 
 # Assets
@@ -294,6 +319,6 @@ $$
 Y=\textbf{L}\cdot Z
 $$
 
-Predpokladajme, že máme vektor $Z$, ktorý obsahuje náhodne vygenerované trhové dáta z normovaného normálneho rozdelenia (dáta sú teda nekorelované, s nulovou strednou hodnotou a jednotkovým rozptylom). Ak tento vektor prenásobíme maticou $L$, získame nový vektor premenných $Y$. Týmto násobením do pôvodne nezávislých vzoriek "vložíme" závislosť z našich pôvodných dát a teda sa priblížime k realite v našej simulácií[^1]. Výsledkom našej snahy je nakoniec transformácia bieleho šumu na dáta, ktoré rešpektujú historické vzťahy medzi aktívami.
+Predpokladajme, že máme vektor $Z$, ktorý obsahuje náhodne vygenerované trhové dáta z normovaného normálneho rozdelenia (dáta sú teda nekorelované, s nulovou strednou hodnotou a jednotkovým rozptylom). Ak tento vektor prenásobíme maticou $L$, získame nový vektor premenných $Y$. Týmto násobením do pôvodne nezávislých vzoriek "vložíme" závislosť z našich pôvodných dát a teda sa priblížime k realite v našej simulácií[^2]. Výsledkom našej snahy je nakoniec transformácia bieleho šumu na dáta, ktoré rešpektujú historické vzťahy medzi aktívami.
 
-[^1]: Ak by ste potrebovali zdroje, z tadialto som čerpal ja do istej miery - [SIMULOVANIE DÁT Z ROZDELENÍ – BAKALÁRSKA PRÁCA, Mátyás Varga, 2014](http://www.iam.fmph.uniba.sk/efm/bakalarky/2014/varga/bakalarka.pdf "SIMULOVANIE DÁT Z ROZDELENÍ – BAKALÁRSKA PRÁCA, Mátyás Varga, 2014"){.uri}
+[^2]: <http://www.iam.fmph.uniba.sk/efm/bakalarky/2014/varga/bakalarka.pdf>
