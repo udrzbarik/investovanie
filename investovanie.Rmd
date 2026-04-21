@@ -18,16 +18,18 @@ Cieľom seminárnej práce, je zostaviť pre nášho investora portfólio ktoré
 
 Pre tento účel sme vybrali ako potenciálnych kandidátov nasledovné aktíva:
 
-1.  [**Zlato (ETC)**](https://etf.dws.com/en-lu/etc/DE000A1EK0G3-xtrackers-physical-gold-eur-hedged-etc/)- ako safe haven, by malo zabezpečiť svojou potenciálne inverznou koreláciou tzv. hedge oproti prepadu ostatných zložiek portfólia.
-2.  [**REITs (ETF)**](https://www.vaneck.com/it/en/investments/real-estate-etf/overview/)- by mali slúžiť na expozíciu sektoru nehnuteľností prostredníctvom Real Estate Investment Trust vehiclov, ktoré držia a investujú do fyzických nehnutelností, no obchodujú sa s likviditou akcií na trhu.
-3.  [**Dlhopisy (ETF)**](https://www.ishares.com/uk/individual/en/products/290618/ishares-high-yield-corp-bond-ucits-etf)- poskytnú expozíciu tzv. fixed income, ktorý je jeden z rovnako populárnych investičným aktív. Z dôvodu vyššej kapacity rizika, no iba averzii voči riziku spojeným s akciami budeme voliť korporátne dlhopisové ETF.
-4.  [**Akcie (ETF)**](https://www.ishares.com/uk/individual/en/products/270048/ishares-msci-world-value-factor-ucits-etf) - volíme v tomto prípade ako najmenšiu zložku. Zameriavame sa na všeobecný index akcií, ktorý je dobre diverzifikovaný. S cieľom mitigovať riziko a expozíciu na USA volíme faktorový variant svetového indexu, ktorý nemá kompozíciu stanovenú na základe Market Capu, no skôr sa jedná o podhodnotené - hodnotové tituly, čo do istej miery môže limitovať aj volatilitu tohto aktíva oproti klasickému World ETF.
+1.  **Physical Gold EUR Hedged (ETC)** - ako safe haven, by malo zabezpečiť svojou potenciálne inverznou koreláciou tzv. hedge oproti prepadu ostatných zložiek portfólia.
+2.  **Global Real Estate (ETF)** - by mali slúžiť na expozíciu sektoru nehnuteľností prostredníctvom Real Estate Investment Trust vehiclov, ktoré držia a investujú do fyzických nehnutelností, no obchodujú sa s likviditou akcií na trhu.
+3.  **High Yield Corp Bonds (ETF)** - poskytnú expozíciu tzv. fixed income, ktorý je jeden z rovnako populárnych investičným aktív. Z dôvodu vyššej kapacity rizika, no iba averzii voči riziku spojeným s akciami budeme voliť korporátne dlhopisové ETF. Napriek high yield klasifikácii vykazujú tieto dlhopisy konzervatívnu volatilitu, čo ich robí efektívnym zdrojom výnosu v rámci nášho konzervatívneho portfólia. Investora by sme však mali oboznámiť s ich potenciálne vyššou koreláciou s akciovým trhom v krízových obdobiach.
+4.  **Inflation Linked Govt Bond (ETF)** - ekvivalent US TIPS ktoré by mali obsahovať dlhopisy ktoré sú tzv. inflation protected.
+5.  **Edge MSCI World Value Factor (ETF)** - volíme v tomto prípade ako najmenšiu zložku. Zameriavame sa na všeobecný index akcií, ktorý je dobre diverzifikovaný. S cieľom mitigovať riziko a expozíciu na USA volíme faktorový variant svetového indexu, ktorý nemá kompozíciu stanovenú na základe Market Capu, no skôr sa jedná o podhodnotené - hodnotové tituly, čo do istej miery môže limitovať aj volatilitu tohto aktíva oproti klasickému World ETF.
+6.  **Longer Dated All Commodities (ETF)** - Jeho konstituenty zastupujú nasledujúce komoditné sektory: energetika, drahé kovy, priemyselné kovy, chov hospodárskych zvierat a poľnohospodárstvo. Tieto aktíva rastú s infláciou a teda je možné od nich čakať proti-inflačný efekt.
 
 #### Import historických dát o aktívach
 
 ```{r}
 
-# Gold EUR Hedged ETC - gold.csv
+# Physical Gold EUR Hedged (ETC) - gold.csv
 # https://etf.dws.com/en-lu/etc/DE000A1EK0G3-xtrackers-physical-gold-eur-hedged-etc/
 
 gold = read_delim(
@@ -42,8 +44,21 @@ gold = read_delim(
   ) %>%
   mutate(date = parse_date_time(date, "dmy"))
 
+# Longer Dated All Commodities (ETF) - com.json
+# https://www.justetf.com/en-be/etf-profile.html?isin=IE00B4WPHX27
 
-# REITs Global Real Estate ETF - reits.json
+com = fromJSON("./data/com.json", flatten = TRUE) %>%
+  rename(
+    value = `value.localized`,
+  ) %>%
+  select(date, value) %>%
+  mutate(
+    value = as.numeric(value),
+    date = parse_date_time(date, "ymd")
+  )
+
+
+# Global Real Estate (ETF) - reits.json
 # https://www.justetf.com/en-be/etf-profile.html?isin=NL0009690239
 
 reits = fromJSON("./data/reits.json", flatten = TRUE) %>%
@@ -57,7 +72,7 @@ reits = fromJSON("./data/reits.json", flatten = TRUE) %>%
   )
 
 
-# Corporate European Bonds ETF - bonds.csv
+# High Yield Corp Bonds (ETF) - bonds.csv
 # https://www.ishares.com/uk/individual/en/products/290618/ishares-high-yield-corp-bond-ucits-etf
 
 bonds = read_delim(
@@ -73,7 +88,23 @@ bonds = read_delim(
   mutate(date = parse_date_time(date, 'dmy'))
 
 
-# World Value Factor Equities ETF - equity.json
+# Inflation Linked Govt Bond (ETF) - tips.csv
+# https://www.ishares.com/uk/individual/en/products/251739/ishares-euro-inflation-linked-government-bond-ucits-etf
+
+tips = read_delim(
+  './data/tips.csv',
+  delim = ';',
+  locale = locale(decimal_mark = ',')
+) %>% 
+  rename(
+    date = `As Of`,
+    value = NAV
+  ) %>%
+  select(date, value) %>%
+  mutate(date = parse_date_time(date, 'dmy'))
+
+
+# Edge MSCI World Value Factor (ETF) - equity.json
 # https://www.justetf.com/en-be/etf-profile.html?isin=IE00BP3QZB59#overview
 
 equity = fromJSON("./data/equity.json", flatten = TRUE) %>%
@@ -90,6 +121,8 @@ portfolio <- bonds %>%
   head(-1) %>% # Vráti všetko okrem posledného riadku
   select(date, bonds_val = value) %>%
   # Joiny eliminuju prebytočne rows
+  inner_join(tips %>% select(date, tips_val = value), by = "date") %>%
+  inner_join(com %>% select(date, com_val = value), by = "date") %>%
   inner_join(equity %>% select(date, equity_val = value), by = "date") %>%
   inner_join(gold %>% select(date, gold_val = value), by = "date") %>%
   inner_join(reits %>% select(date, reits_val = value), by = "date")
@@ -111,7 +144,9 @@ returns <- portfolio %>%
     bonds_ret  = log(bonds_val  / lag(bonds_val)),
     equity_ret = log(equity_val / lag(equity_val)),
     gold_ret   = log(gold_val   / lag(gold_val)),
-    reits_ret  = log(reits_val  / lag(reits_val))
+    reits_ret  = log(reits_val  / lag(reits_val)),
+    tips_ret   = log(tips_val / lag(tips_val)),
+    com_ret   = log(com_val / lag(com_val)),
   ) %>%
   drop_na()
 
@@ -131,21 +166,20 @@ stats <- returns %>%
     sd_daily    = sd(ret),
     mean_annual = mean_daily * ann,
     sd_annual   = sd_daily  * sqrt(ann),
-    sharpe      = mean_annual / sd_annual,
-    skewness    = (mean((ret - mean(ret))^3)) / (sd(ret)^3),
-    kurtosis    = (mean((ret - mean(ret))^4)) / (sd(ret)^4),
     .groups     = "drop"
   )
 
 
 # Returns matrix
 ret_matrix <- returns %>%
-  select(bonds_ret, equity_ret, gold_ret, reits_ret) %>%
+  select(bonds_ret, equity_ret, gold_ret, reits_ret, tips_ret, com_ret) %>%
   as.matrix()
 
 # Covariance matrix
 cov_daily    <- cov(ret_matrix)
 cov_annual   <- cov_daily * ann
+
+cor_daily <- cor(ret_matrix)
 
 print(stats)
 print(round(cov_annual, 6))
@@ -153,3 +187,76 @@ print(round(cov_annual, 6))
 ```
 
 #### Markowitzová mean-variance metóda stanovenia váh
+
+```{r}
+library(quadprog)
+
+
+# Assets
+asset_order <- c("bonds", "com", "equity", "gold", "reits", "tips")
+
+# Return matrix
+ret_matrix <- returns %>%
+  select(paste0(asset_order, "_ret")) %>%
+  as.matrix()
+
+# Covariance
+cov_annual <- cov(ret_matrix) * ann
+
+mu <- stats %>%
+  arrange(match(asset, asset_order)) %>%
+  pull(mean_annual)
+
+n <- length(mu)
+
+# Limity
+target_return <- 0.07
+Rf            <- 0.0215
+
+# Named vector
+upper_bounds <- c(bonds = 1, com = 1, equity = 0.1,
+                  gold  = 1, reits = 1, tips   = 1)
+
+upper_bounds <- upper_bounds[asset_order]
+
+A_eq    <- cbind(mu, rep(1, n))
+b_eq    <- c(target_return, 1)
+
+A_lower <- diag(n)
+b_lower <- rep(0, n)                        
+
+A_upper <- -diag(n)
+b_upper <- -upper_bounds
+
+Amat <- cbind(A_eq, A_lower, A_upper)
+bvec <- c(b_eq, b_lower, b_upper)
+
+# Solver
+sol <- solve.QP(
+  Dmat = 2 * cov_annual,
+  dvec = rep(0, n),
+  Amat = Amat,
+  bvec = bvec,
+  meq  = 2
+)
+
+weights        <- sol$solution
+names(weights) <- asset_order
+
+# Portfolio statistics
+port_return <- sum(weights * mu)
+port_sd     <- sqrt(t(weights) %*% cov_annual %*% weights)
+port_sharpe <- (port_return - Rf) / port_sd
+
+cat(sprintf(
+  "--- Markowitz optimal weights (target = %.2f%%, equity ≤ 10%%) ---\n",
+  target_return * 100
+))
+
+print(round(weights, 4))
+
+cat("\n--- Portfolio statistics ---\n")
+cat(sprintf("Expected annual return : %.4f (%.2f%%)\n", port_return, port_return * 100))
+cat(sprintf("Annual std deviation   : %.4f (%.2f%%)\n", port_sd,     port_sd     * 100))
+cat(sprintf("Sharpe ratio (Rf=%.3f): %.4f\n",           Rf,          port_sharpe))
+```
