@@ -10,6 +10,7 @@ library(quadprog)
 library(Matrix)
 
 options(digits = 10)
+
 ```
 
 ## Investovanie
@@ -52,6 +53,7 @@ gold = read_delim(
     underlying_value = `Underlying`
   ) %>%
   mutate(date = parse_date_time(date, "dmy"))
+
 
 # Longer Dated All Commodities (ETF) - com.json
 # https://www.justetf.com/en-be/etf-profile.html?isin=IE00B4WPHX27
@@ -135,7 +137,7 @@ portfolio <- bonds %>%
   full_join(equity %>% select(date, equity_val = value), by = "date") %>%
   full_join(gold %>% select(date, gold_val = value), by = "date") %>%
   full_join(reits %>% select(date, reits_val = value), by = "date") %>%
-  filter(date >= as.Date("2014-10-03")) %>%
+  filter(date >= as.Date("2014-10-01")) %>%
   arrange(date)
 
 ```
@@ -292,14 +294,14 @@ mu <- stats %>%
 n <- length(mu)
 
 # Constraints
-target_return <- 0.055
+target_return <- 0.05
 Rf <- 0.0215
 
 upper_bounds <- c(
   bonds  = 1,
   com    = 1,
   equity = 0.1,
-  gold   = 1,
+  gold   = 0.1,
   reits  = 1,
   tips   = 1
 )
@@ -354,12 +356,13 @@ cat(sprintf(
   "--- Markowitz optimal weights (target = %.2f%%, equity ≤ 10%%) ---\n",
   target_return * 100
 ))
-print(round(weights, 2))
+print(round(weights, 4))
 
 cat("\n--- Portfolio statistics ---\n")
 cat(sprintf("Expected annual return : %.4f (%.2f%%)\n", port_return, port_return * 100))
 cat(sprintf("Annual std deviation   : %.4f (%.2f%%)\n", port_sd, port_sd * 100))
 cat(sprintf("Sharpe ratio (Rf=%.4f): %.4f\n", Rf, port_sharpe))
+
 ```
 
 ### Choleskyho dekompozícia
@@ -386,6 +389,7 @@ Predpokladajme, že máme vektor $Z$, ktorý obsahuje náhodne vygenerované trh
 
 L = t(chol(cov_annual))
 print(L)
+
 ```
 
 ### Monte Carlo simulácia
@@ -524,7 +528,7 @@ sample_sims <- sample(unique(sim_df$sim), 50)
 sim_df %>%
   filter(sim %in% sample_sims) %>%
   ggplot(aes(x = month, y = value, group = sim)) +
-  geom_line(alpha = 0.4) +
+  geom_line(alpha = 0.2) +
   labs(
     title = "Monte Carlo simulácia hodnoty portfólia",
     x = "Mesiac",
