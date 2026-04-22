@@ -137,7 +137,8 @@ portfolio <- bonds %>%
   full_join(equity %>% select(date, equity_val = value), by = "date") %>%
   full_join(gold %>% select(date, gold_val = value), by = "date") %>%
   full_join(reits %>% select(date, reits_val = value), by = "date") %>%
-  filter(date >= as.Date("2014-10-01")) %>%
+  filter(date >= as.Date("2014-10-01")) %>%   # Cutoff aby boli data +- z rovnakeho režimu
+  filter(wday(date, week_start = 1) <= 5) %>% # Vyfiltruje víkendy aby to neskresľovalo
   arrange(date)
 
 ```
@@ -243,9 +244,9 @@ print(cor_daily)
 
 Markowitzova moderná teória portfólia (MPT)[^1] nám dáva možnosť, ako tieto nami vybrané aktíva optimálne kombinovať. Základným cieľom je nájsť takú kombináciu váh aktív, ktorá **minimalizuje riziko pre danú úroveň očakávaného výnosu.**
 
-Predpokladajme portfólio s $n$ aktívami, vektorom váh $w$, vektorom očakávaných výnosov $\mu$ a kovariančnou maticou $\Sigma$.
-
 [^1]: <https://sites.math.washington.edu/~burke/crs/408/fin-proj/mark1.pdf>
+
+Predpokladajme portfólio s $n$ aktívami, vektorom váh $w$, vektorom očakávaných výnosov $\mu$ a kovariančnou maticou $\Sigma$.
 
 -   Očakávaný výnos portfólia: $E(R_p) = w^T \mu$
 
@@ -255,12 +256,13 @@ V klasickom modeli hľadáme váhy $w$ riešením problému kvadratického progr
 
 $$
 \min_{w} \frac{1}{2} w^T \Sigma w
-$$
-**Za podmienok:**
+$$ **Za podmienok:**
 
-1\. $\sum_{i=1}^{n} w_i = 1$ (plná investícia kapitálu)
-2. $w^T \mu = \mu_{target}$ (dosiahnutie cieľového výnosu)
-3. $w_i \geq 0$ (zákaz predajov nakrátko)
+1.  $\sum_{i=1}^{n} w_i = 1$ (plná investícia kapitálu)
+
+2.  $w^T \mu = \mu_{target}$ (dosiahnutie cieľového výnosu)
+
+3.  $w_i \geq 0$ (zákaz predajov nakrátko)
 
 **Efektívna hranica (Efficient Frontier)**
 
@@ -301,7 +303,7 @@ upper_bounds <- c(
   bonds  = 1,
   com    = 1,
   equity = 0.1,
-  gold   = 0.1,
+  gold   = 0.15,
   reits  = 1,
   tips   = 1
 )
@@ -327,7 +329,7 @@ b_eq <- c(
 
 # Lower / upper bounds
 A_lower <- diag(n)
-b_lower <- rep(0.00, n)
+b_lower <- rep(0, n)
 
 A_upper <- -diag(n)
 b_upper <- -upper_bounds
@@ -353,15 +355,15 @@ port_sd     <- sqrt(t(weights) %*% cov_annual %*% weights)
 port_sharpe <- (port_return - Rf) / port_sd
 
 cat(sprintf(
-  "--- Markowitz optimal weights (target = %.2f%%, equity ≤ 10%%) ---\n",
+  "--- Markowitz optimal weights (target = %.2f%%, equity ≤ 10%%, gold ≤ 10%%) ---\n",
   target_return * 100
 ))
 print(round(weights, 4))
 
 cat("\n--- Portfolio statistics ---\n")
-cat(sprintf("Expected annual return : %.4f (%.2f%%)\n", port_return, port_return * 100))
-cat(sprintf("Annual std deviation   : %.4f (%.2f%%)\n", port_sd, port_sd * 100))
-cat(sprintf("Sharpe ratio (Rf=%.4f): %.4f\n", Rf, port_sharpe))
+cat(sprintf("Expected annual return    : %.4f (%.2f%%)\n", port_return, port_return * 100))
+cat(sprintf("Annual std deviation      : %.4f (%.2f%%)\n", port_sd, port_sd * 100))
+cat(sprintf("Sharpe ratio (Rf=%.4f)  : %.4f\n", Rf, port_sharpe))
 
 ```
 
@@ -430,7 +432,7 @@ sigma2 <- diag(cov_annual)
 drift <- (mu - 0.5 * sigma2) * dt
 
 # Cholesky faktor pre mesačné šoky
-cov_monthly <- cov_annual * dt
+cov_monthly <- cov_annual
 L_month <- t(chol(cov_monthly))
 
 # Matica na uloženie hodnôt portfólia
@@ -459,7 +461,7 @@ for (sim in 1:n_sims) {
     shock <- L_month %*% z
     
     # Simulované log-returny aktív
-    log_ret_t <- drift + as.vector(shock)
+    log_ret_t <- drift + as.vector(shock) * sqrt(dt)
     
     # Hrubé výnosové faktory aktív
     gross_ret <- exp(log_ret_t)
@@ -500,7 +502,7 @@ q95 <- quantile(terminal_values, 0.95)
 total_invested <- initial + monthly * steps
 prob_loss      <- mean(terminal_values < total_invested)
 
-cat("\n--- Monte Carlo simulation results ---\n")
+cat("\n  --- Monte Carlo simulation results ---\n")
 cat(sprintf("Total invested capital     : %.2f EUR\n", total_invested))
 cat(sprintf("Mean terminal value        : %.2f EUR\n", mean_terminal))
 cat(sprintf("Median terminal value      : %.2f EUR\n", median_terminal))
@@ -520,32 +522,108 @@ cat(sprintf("95th percentile            : %.2f EUR\n", q95))
 
 sim_df <- as_tibble(portfolio_paths) %>%
   mutate(month = 0:steps) %>%
-  pivot_longer(-month, names_to = "sim", values_to = "value")
+  pivot_longer(-month, names_to = "sim", values_to = "value") %>%
+  mutate(year = month / 12)
 
-# Vyberieme len časť ciest, aby graf nebol neprehľadný
-sample_sims <- sample(unique(sim_df$sim), 50)
+set.seed(123)
+sample_sims <- sample(unique(sim_df$sim), 30)
 
-sim_df %>%
-  filter(sim %in% sample_sims) %>%
-  ggplot(aes(x = month, y = value, group = sim)) +
-  geom_line(alpha = 0.2) +
+# Median path
+median_path <- apply(portfolio_paths, 1, median, na.rm = TRUE)
+median_df <- tibble(
+  month = 0:steps,
+  year = (0:steps) / 12,
+  value = median_path
+)
+
+# Closest simulation to median terminal value
+median_terminal <- median(terminal_values)
+closest_sim_idx <- which.min(abs(terminal_values - median_terminal))
+closest_sim_col <- paste0("V", closest_sim_idx)
+
+median_path_df <- sim_df %>%
+  filter(sim == closest_sim_col)
+
+median_sim_id <- unique(median_path_df$sim)
+
+dir.create("./figures", showWarnings = FALSE, recursive = TRUE)
+
+
+# -------------------------------
+#   Monte Carlo paths chart
+# -------------------------------
+
+p_paths <- sim_df %>%
+  filter(sim %in% sample_sims,
+         sim != median_sim_id) %>%
+  ggplot(aes(x = year, y = value, group = sim)) +
+  geom_line(
+    color = "grey60",
+    alpha = 0.35,
+    linewidth = 0.6
+  ) +
+  geom_line(
+    data = median_df,
+    aes(x = year, y = value, color = "Median"),
+    linewidth = .8
+  ) +
+  geom_line(
+    data = median_path_df,
+    aes(x = year, y = value, color = "Closest simulation to median"),
+    linewidth = .8
+  ) +
+  scale_color_manual(
+    name = NULL,
+    values = c(
+      "Closest simulation to median" = "red",
+      "Median" = "dodgerblue2"
+    )
+  ) +
+  scale_x_continuous(
+    breaks = 0:15,
+    limits = c(0, 15),
+      expand = c(0, 0)
+  ) +
+  scale_y_continuous(
+    limits = c(initial, 250000),
+    expand = c(0, 0),
+    labels = scales::label_number(scale = 1e-3, suffix = "K")
+  ) +
   labs(
-    title = "Monte Carlo simulácia hodnoty portfólia",
-    x = "Mesiac",
+    title = NULL,
+    x = "Rok",
     y = "Hodnota portfólia (EUR)"
   ) +
-  theme_minimal()
+  theme_classic() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.text = element_text(size = 12),
+    
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line = element_blank(),
+    
+    axis.ticks = element_line(linewidth = 0.4),   # thinner ticks
+    axis.ticks.length = unit(4, "pt"),             # shorter ticks
+    
+    axis.text = element_text(size = 11),  # smaller tick labels
+  
+    axis.text.x = element_text(margin = margin(t = 10)),  # push down
+    axis.text.y = element_text(margin = margin(r = 8)),   # push left
+    
+    axis.title.x = element_text(size = 12, margin = margin(t = 12)),
+    axis.title.y = element_text(size = 12, margin = margin(r = 12))
+  )
 
-# Histogram terminálnych hodnôt
-tibble(terminal_value = terminal_values) %>%
-  ggplot(aes(x = terminal_value)) +
-  geom_histogram(bins = 30) +
-  geom_vline(xintercept = total_invested, linetype = "dashed") +
-  labs(
-    title = "Rozdelenie terminálnej hodnoty portfólia",
-    x = "Terminálna hodnota (EUR)",
-    y = "Počet simulácií"
-  ) +
-  theme_minimal()
+print(p_paths)
 
+ggsave(
+  filename = "./figures/monte_carlo_portfolio.pdf",
+  plot = p_paths,
+  device = "pdf",
+  width = 8,
+  height = 5,
+  bg = "white"
+)
 ```
