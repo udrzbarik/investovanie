@@ -341,15 +341,15 @@ mu <- stats %>%
 n <- length(mu)
 
 # Constraints
-target_return <- 0.05
+target_return <- 0.045
 Rf <- 0.0215
 
 upper_bounds <- c(
   bonds  = 1,
-  com    = 1,
-  equity = 0.1,
+  com    = 0.2,
+  equity = 0.15,
   gold   = 0.15,
-  reits  = 1,
+  reits  = 0.2,
   tips   = 1
 )
 
@@ -374,7 +374,14 @@ b_eq <- c(
 
 # Lower / upper bounds
 A_lower <- diag(n)
-b_lower <- rep(0, n)
+b_lower <- c(
+  0,
+  0,
+  0,
+  0,
+  0,
+  0.1
+)
 
 A_upper <- -diag(n)
 b_upper <- -upper_bounds
