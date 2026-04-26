@@ -1,0 +1,890 @@
+---
+title: "Návrh investičného portfólia"
+author: "Bc. Róbert Hošták, Bc. Branislav Kučerík, Bc. Elizabeta Záhorecová"
+date: "Akademický rok 2025/2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    number_sections: true
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries}
+library(tidyverse)
+library(jsonlite)
+library(lubridate)
+library(quadprog)
+library(Matrix)
+
+options(digits = 10)
+```
+
+# Import historických dát
+
+Každé aktívum je importované z vlastného súboru. Dáta sú filtrované od
+`2014-10-01` (začiatok dostupnosti equity ETF) a víkendové záznamy sú
+odstránené.
+
+> **Poznámka k cestám:** Všetky dátové súbory (`bonds.csv`, `tips.csv`,
+> `gold.csv`, `com.json`, `equity.json`, `reits.json`) musia byť v
+> **rovnakom priečinku** ako tento `.Rmd` súbor.
+
+```{r import-data}
+
+# Physical Gold EUR Hedged ETC
+# https://etf.dws.com/en-lu/etc/DE000A1EK0G3-xtrackers-physical-gold-eur-hedged-etc/
+gold <- read_delim(
+  "./data/gold.csv",
+  delim  = ";",
+  locale = locale(decimal_mark = ","),
+  show_col_types = FALSE
+) %>%
+  rename(date = `NAV date`, value = `ETC value`) %>%
+  select(date, value) %>%
+  mutate(date = parse_date_time(date, "dmy"))
+
+
+# Longer Dated All Commodities ETF
+# https://www.justetf.com/en-be/etf-profile.html?isin=IE00B4WPHX27
+com <- fromJSON("./data/com.json", flatten = TRUE) %>%
+  mutate(value = as.numeric(`value.localized`)) %>%
+  select(date, value) %>%
+  mutate(date = parse_date_time(date, "ymd"))
+
+
+# Global Real Estate ETF (REIT)
+# https://www.justetf.com/en-be/etf-profile.html?isin=NL0009690239
+reits <- fromJSON("./data/reits.json", flatten = TRUE) %>%
+  mutate(value = as.numeric(`value.localized`)) %>%
+  select(date, value) %>%
+  mutate(date = parse_date_time(date, "ymd"))
+
+
+# iShares High Yield Corp Bond UCITS ETF
+# https://www.ishares.com/uk/individual/en/products/290618/
+bonds <- read_delim(
+  "./data/bonds.csv",
+  delim  = ";",
+  locale = locale(decimal_mark = ","),
+  show_col_types = FALSE
+) %>%
+  rename(date = `As Of`, value = NAV) %>%
+  select(date, value) %>%
+  mutate(date = parse_date_time(date, "dmy"))
+
+
+# iShares Euro Inflation Linked Govt Bond ETF (TIPS)
+# https://www.ishares.com/uk/individual/en/products/251739/
+tips <- read_delim(
+  "./data/tips.csv",
+  delim  = ";",
+  locale = locale(decimal_mark = ","),
+  show_col_types = FALSE
+) %>%
+  rename(date = `As Of`, value = NAV) %>%
+  select(date, value) %>%
+  mutate(date = parse_date_time(date, "dmy"))
+
+
+# iShares Edge MSCI World Value Factor ETF
+# https://www.justetf.com/en-be/etf-profile.html?isin=IE00BP3QZB59
+equity <- fromJSON("./data/equity.json", flatten = TRUE) %>%
+  mutate(value = as.numeric(`value.localized`)) %>%
+  select(date, value) %>%
+  mutate(date = parse_date_time(date, "ymd"))
+
+
+# Spojenie všetkých aktív — cutoff 2014-10-01 (equity ETF), len pracovné dni
+portfolio <- bonds %>%
+  head(-1) %>%                                   # posledný riadok bonds má chýbajúci Fund Return
+  select(date, bonds_val = value) %>%
+  full_join(tips   %>% select(date, tips_val   = value), by = "date") %>%
+  full_join(com    %>% select(date, com_val    = value), by = "date") %>%
+  full_join(equity %>% select(date, equity_val = value), by = "date") %>%
+  full_join(gold   %>% select(date, gold_val   = value), by = "date") %>%
+  full_join(reits  %>% select(date, reits_val  = value), by = "date") %>%
+  dplyr::filter(date >= as.Date("2014-10-01")) %>%
+  dplyr::filter(wday(date, week_start = 1) <= 5) %>%
+  arrange(date)
+
+cat("Portfolio:", nrow(portfolio), "riadkov |",
+    format(min(portfolio$date), "%Y-%m-%d"), "–",
+    format(max(portfolio$date), "%Y-%m-%d"), "\n")
+```
+
+# Deskriptívne štatistiky
+
+## Log-výnosy a anualizované štatistiky
+
+Denné log-výnosy sú vypočítané pre každé aktívum. Anualizácia sa
+vykonáva pomocou faktora **252 obchodných dní** za rok.
+
+```{r log-returns}
+
+# Počet obchodných dní v roku
+ann <- 252
+
+# Poradie aktív – konzistentné v celom dokumente
+asset_order <- c("bonds", "com", "equity", "gold", "reits", "tips")
+
+returns <- portfolio %>%
+  arrange(date) %>%
+  mutate(
+    bonds_ret  = if_else(!is.na(bonds_val)  & !is.na(lag(bonds_val)),
+                         log(bonds_val  / lag(bonds_val)),  NA_real_),
+    com_ret    = if_else(!is.na(com_val)    & !is.na(lag(com_val)),
+                         log(com_val    / lag(com_val)),    NA_real_),
+    equity_ret = if_else(!is.na(equity_val) & !is.na(lag(equity_val)),
+                         log(equity_val / lag(equity_val)), NA_real_),
+    gold_ret   = if_else(!is.na(gold_val)   & !is.na(lag(gold_val)),
+                         log(gold_val   / lag(gold_val)),   NA_real_),
+    reits_ret  = if_else(!is.na(reits_val)  & !is.na(lag(reits_val)),
+                         log(reits_val  / lag(reits_val)),  NA_real_),
+    tips_ret   = if_else(!is.na(tips_val)   & !is.na(lag(tips_val)),
+                         log(tips_val   / lag(tips_val)),   NA_real_)
+  )
+
+stats <- returns %>%
+  select(ends_with("_ret")) %>%
+  pivot_longer(everything(), names_to = "asset", values_to = "ret") %>%
+  mutate(asset = str_remove(asset, "_ret")) %>%
+  group_by(asset) %>%
+  summarise(
+    n_obs       = sum(!is.na(ret)),
+    mean_daily  = mean(ret, na.rm = TRUE),
+    sd_daily    = sd(ret,   na.rm = TRUE),
+    mean_annual = mean_daily * ann,
+    sd_annual   = sd_daily  * sqrt(ann),
+    .groups = "drop"
+  )
+
+print(stats)
+```
+
+## Kovariančná a korelačná matica
+
+Kovariancie sú odhadované pomocou **pairwise complete observations** —
+každý pár aktív využíva všetky spoločne dostupné pozorovania.
+Kovariančná matica je anualizovaná násobením faktorom 252.
+
+```{r covariance}
+
+ret_matrix <- returns %>%
+  select(bonds_ret, com_ret, equity_ret, gold_ret, reits_ret, tips_ret) %>%
+  as.matrix()
+
+cov_annual <- cov(ret_matrix, use = "pairwise.complete.obs") * ann
+cor_mat    <- cor(ret_matrix, use = "pairwise.complete.obs")
+
+cat("--- Anualizovaná kovariančná matica ---\n")
+print(round(cov_annual, 6))
+
+cat("\n--- Denná korelačná matica ---\n")
+print(round(cor_mat, 4))
+```
+
+# Markowitzova mean-variance optimalizácia váh
+
+Cieľom je nájsť váhy $w$, ktoré **minimalizujú riziko**
+($\sigma_p^2 = w^T \Sigma w$) pri **cieľovom výnose 4 % p.a.** a
+obmedzeniach: equity $\leq$ 10 %, zlato $\leq$ 15 %, všetky váhy
+$\geq 0$, suma $= 1$.
+
+```{r markowitz}
+
+# Parametre
+target_return <- 0.05    # Cieľový výnos 4 % p.a.  (Tabuľka 3 seminarky)
+Rf            <- 0.0215   # Bezriziková sadzba – depozitná sadzba ECB 3,5 %
+
+# Anualizované stredné výnosy v poradí asset_order
+mu <- stats %>%
+  arrange(match(asset, asset_order)) %>%
+  pull(mean_annual)
+
+n <- length(mu)
+
+# Horné ohraničenia váh (Tabuľka 2 seminarky)
+upper_bounds <- c(
+  bonds  = 1.00,
+  com    = 1.00,
+  equity = 0.10,   # max 10 % akcie
+  gold   = 0.15,   # max 15 % zlato
+  reits  = 1.00,
+  tips   = 1.00
+)[asset_order]
+
+# Oprava kovariančnej matice ak nie je pozitívne definitná
+if (any(eigen(cov_annual, symmetric = TRUE, only.values = TRUE)$values <= 0)) {
+  cov_annual <- as.matrix(nearPD(cov_annual)$mat)
+  cat("Kovariančná matica opravená metódou nearPD.\n")
+}
+
+# Quadprog: min 0.5 x^T D x  s.t. A^T x >= b
+# Stĺpce Amat: [výnos=target, suma=1, dolné ohraničenia (>=0), horné ohraničenia (>=-ub)]
+Amat <- cbind(mu, rep(1, n), diag(n), -diag(n))
+bvec <- c(target_return, 1, rep(0, n), -upper_bounds)
+
+sol <- solve.QP(
+  Dmat = 2 * cov_annual,
+  dvec = rep(0, n),
+  Amat = Amat,
+  bvec = bvec,
+  meq  = 2       # prvé 2 podmienky sú rovnosti
+)
+
+weights      <- sol$solution
+names(weights) <- asset_order
+
+port_return  <- sum(weights * mu)
+port_sd      <- as.numeric(sqrt(t(weights) %*% cov_annual %*% weights))
+port_sharpe  <- (port_return - Rf) / port_sd
+
+cat(sprintf("--- Markowitzove optimálne váhy (cieľ = %.0f %%) ---\n",
+            target_return * 100))
+print(round(weights, 4))
+
+cat("\n--- Tabuľka 3: Štatistiky portfólia ---\n")
+cat(sprintf("Očakávaný ročný výnos p.a.    : %.4f  (%.2f %%)\n",
+            port_return, port_return * 100))
+cat(sprintf("Volatilita p.a. (σ)           : %.4f  (%.2f %%)\n",
+            port_sd, port_sd * 100))
+cat(sprintf("Sharpeho pomer (Rf = %.1f %%) : %.4f\n",
+            Rf * 100, port_sharpe))
+```
+
+# Kvantitatívna analýza portfólia
+
+## Graf 1: Alokácia portfólia – koláčový graf
+
+```{r pie-chart, fig.width=7, fig.height=5}
+
+pie_labels <- c(
+  bonds  = "High Yield Corp Bonds (30 %)",
+  com    = "Komodity ETF (10 %)",
+  equity = "Globálne akcie ETF (10 %)",
+  gold   = "Zlato ETC (10 %)",
+  reits  = "Global Real Estate ETF (25 %)",
+  tips   = "Inflation Linked Govt Bond (15 %)"
+)
+
+# Váhy zo seminarky (Tabuľka 2) – pre koláčový graf používame zadané váhy
+seminar_weights <- c(bonds = 0.30, com = 0.10, equity = 0.10,
+                     gold = 0.10, reits = 0.25, tips = 0.15)
+
+pie_df <- tibble(
+  asset  = names(seminar_weights),
+  weight = seminar_weights,
+  label  = pie_labels[names(seminar_weights)]
+)
+
+ggplot(pie_df, aes(x = "", y = weight, fill = label)) +
+  geom_col(width = 1, color = "white", linewidth = 0.5) +
+  coord_polar(theta = "y") +
+  scale_fill_brewer(palette = "Set2", name = NULL) +
+  labs(title = "Graf 1: Alokácia investičného portfólia podľa tried aktív") +
+  theme_void() +
+  theme(
+    legend.position = "right",
+    legend.text     = element_text(size = 9),
+    plot.title      = element_text(size = 12, face = "bold", hjust = 0.5,
+                                   margin = margin(b = 10))
+  )
+```
+
+## Graf 2: Distribúcia ročných výnosov – Boxplot
+
+```{r boxplot-annual, fig.width=9, fig.height=5}
+
+asset_labels <- c(
+  bonds  = "High Yield\nCorp Bonds",
+  com    = "Komodity\n(ETF)",
+  equity = "Globálne\nakcie (ETF)",
+  gold   = "Zlato\n(ETC)",
+  reits  = "Global Real\nEstate (ETF)",
+  tips   = "Inflation Linked\nGovt Bond (ETF)"
+)
+
+# Ročné výnosy: sumujeme denné log-výnosy za každý kalendárny rok
+annual_ret <- returns %>%
+  mutate(year = year(date)) %>%
+  select(year, ends_with("_ret")) %>%
+  pivot_longer(-year, names_to = "asset", values_to = "ret") %>%
+  mutate(asset = str_remove(asset, "_ret")) %>%
+  dplyr::filter(!is.na(ret)) %>%
+  group_by(asset, year) %>%
+  summarise(annual_return = sum(ret), .groups = "drop") %>%
+  mutate(
+    asset_label = asset_labels[asset],
+    asset_label = factor(asset_label, levels = asset_labels[asset_order])
+  )
+
+ggplot(annual_ret, aes(x = asset_label, y = annual_return, fill = asset_label)) +
+  geom_boxplot(alpha = 0.75, outlier.shape = 21, outlier.size = 2.5,
+               color = "grey30", linewidth = 0.5) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black", linewidth = 0.6) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Graf 2: Distribúcia ročných výnosov tried aktív (historické dáta)",
+    x     = NULL,
+    y     = "Ročný log-výnos"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line       = element_blank(),
+    plot.title      = element_text(size = 12, face = "bold", margin = margin(b = 10)),
+    axis.text       = element_text(size = 10),
+    axis.title.y    = element_text(size = 11, margin = margin(r = 10))
+  )
+```
+
+## Graf 3: Historické kumulatívne výnosy
+
+```{r cumulative-returns, fig.width=10, fig.height=5}
+
+ret_cols   <- paste0(asset_order, "_ret")
+
+# Portfóliový denný výnos = vážený súčet log-výnosov (Markowitzove váhy)
+cumret <- returns %>%
+  select(date, all_of(ret_cols)) %>%
+  mutate(
+    portfolio_ret = as.numeric(as.matrix(select(., all_of(ret_cols))) %*% weights)
+  )
+
+label_map <- c(
+  bonds_ret     = "Bonds",
+  com_ret       = "Komodity",
+  equity_ret    = "Akcie",
+  gold_ret      = "Zlato",
+  reits_ret     = "REITs",
+  tips_ret      = "TIPS",
+  portfolio_ret = "Portfólio"
+)
+
+cum_long <- cumret %>%
+  pivot_longer(-date, names_to = "asset", values_to = "ret") %>%
+  dplyr::filter(!is.na(ret)) %>%
+  group_by(asset) %>%
+  arrange(date) %>%
+  mutate(cum_ret = cumsum(ret)) %>%
+  ungroup() %>%
+  mutate(
+    label        = label_map[asset],
+    is_portfolio = (asset == "portfolio_ret")
+  )
+
+ggplot(cum_long %>% dplyr::filter(!is_portfolio),
+       aes(x = date, y = cum_ret, color = label, group = asset)) +
+  geom_line(alpha = 0.6, linewidth = 0.7) +
+  geom_line(
+    data = cum_long %>% dplyr::filter(is_portfolio),
+    aes(x = date, y = cum_ret, group = asset),
+    color = "red", linewidth = 1.3, inherit.aes = FALSE
+  ) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    title  = "Graf 3: Kumulatívny výnos tried aktív a portfólia (červená = portfólio)",
+    x      = NULL,
+    y      = "Kumulatívny log-výnos",
+    color  = NULL
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "bottom",
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line       = element_blank(),
+    plot.title      = element_text(size = 11, face = "bold", margin = margin(b = 10)),
+    axis.text       = element_text(size = 10)
+  )
+```
+
+## Graf 4: Distribúcia mesačných výnosov – Histogramy + KDE
+
+```{r histograms-monthly, fig.width=12, fig.height=7}
+
+monthly_ret <- returns %>%
+  mutate(ym = floor_date(date, "month")) %>%
+  select(ym, ends_with("_ret")) %>%
+  pivot_longer(-ym, names_to = "asset", values_to = "ret") %>%
+  mutate(asset = str_remove(asset, "_ret")) %>%
+  dplyr::filter(!is.na(ret)) %>%
+  group_by(asset, ym) %>%
+  summarise(monthly_return = sum(ret), .groups = "drop") %>%
+  mutate(
+    asset_label = asset_labels[asset],
+    asset_label = factor(asset_label, levels = asset_labels[asset_order])
+  )
+
+ggplot(monthly_ret, aes(x = monthly_return, fill = asset_label)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 30,
+                 color = "white", alpha = 0.8, linewidth = 0.2) +
+  geom_density(color = "grey20", linewidth = 0.8, fill = NA) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "black", linewidth = 0.5) +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_brewer(palette = "Set2") +
+  facet_wrap(~ asset_label, scales = "free", ncol = 3) +
+  labs(
+    title = "Graf 4: Distribúcia mesačných výnosov tried aktív a portfólia (histogram + KDE)",
+    x     = "Mesačný log-výnos",
+    y     = "Hustota"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position  = "none",
+    panel.border     = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line        = element_blank(),
+    strip.background = element_rect(fill = "grey92", color = "grey70"),
+    strip.text       = element_text(size = 9, face = "bold"),
+    plot.title       = element_text(size = 11, face = "bold", margin = margin(b = 10)),
+    axis.text        = element_text(size = 9)
+  )
+```
+
+## Graf 5: Korelačná matica tried aktív
+
+```{r correlation-heatmap, fig.width=7, fig.height=6}
+
+cor_labels <- c(
+  bonds_ret  = "Bonds",
+  com_ret    = "Komodity",
+  equity_ret = "Akcie",
+  gold_ret   = "Zlato",
+  reits_ret  = "REITs",
+  tips_ret   = "TIPS"
+)
+
+cor_df <- as.data.frame(cor_mat) %>%
+  rownames_to_column("asset1") %>%
+  pivot_longer(-asset1, names_to = "asset2", values_to = "correlation") %>%
+  mutate(
+    a1 = factor(cor_labels[asset1], levels = cor_labels),
+    a2 = factor(cor_labels[asset2], levels = cor_labels)
+  )
+
+ggplot(cor_df, aes(x = a1, y = a2, fill = correlation)) +
+  geom_tile(color = "white", linewidth = 0.5) +
+  geom_text(aes(label = sprintf("%.2f", correlation)), size = 3.5, color = "black") +
+  scale_fill_gradient2(
+    low = "#d73027", mid = "white", high = "#1a9850",
+    midpoint = 0, limits = c(-1, 1), name = "Korelácia"
+  ) +
+  labs(
+    title = "Graf 5: Korelačná matica tried aktív portfólia",
+    x     = NULL,
+    y     = NULL
+  ) +
+  coord_fixed() +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    plot.title  = element_text(size = 12, face = "bold", margin = margin(b = 10))
+  )
+```
+
+## Tabuľka 4 + Graf 6: Sharpeho pomer
+
+Sharpeho pomer: $S_p = \frac{R_p - R_f}{\sigma_p}$, kde $R_f = 3{,}5~\%$
+(depozitná sadzba ECB).
+
+```{r sharpe-ratio, fig.width=8, fig.height=5}
+
+sharpe_df <- stats %>%
+  mutate(sharpe = (mean_annual - Rf) / sd_annual) %>%
+  bind_rows(tibble(
+    asset       = "portfolio",
+    mean_annual = port_return,
+    sd_annual   = port_sd,
+    sharpe      = port_sharpe
+  )) %>%
+  mutate(
+    label = case_when(
+      asset == "bonds"     ~ "Bonds",
+      asset == "com"       ~ "Komodity",
+      asset == "equity"    ~ "Akcie",
+      asset == "gold"      ~ "Zlato",
+      asset == "reits"     ~ "REITs",
+      asset == "tips"      ~ "TIPS",
+      asset == "portfolio" ~ "PORTFÓLIO"
+    ),
+    label        = factor(label, levels = c("Bonds","Komodity","Akcie","Zlato",
+                                            "REITs","TIPS","PORTFÓLIO")),
+    is_portfolio = (asset == "portfolio")
+  )
+
+cat("--- Tabuľka 4: Sharpeho pomer tried aktív a portfólia ---\n")
+sharpe_df %>%
+  select(label, mean_annual, sd_annual, sharpe) %>%
+  mutate(across(c(mean_annual, sd_annual, sharpe), ~ round(.x, 4))) %>%
+  print()
+
+ggplot(sharpe_df, aes(x = label, y = sharpe, fill = is_portfolio)) +
+  geom_col(width = 0.65, alpha = 0.9, color = "grey30", linewidth = 0.3) +
+  geom_hline(yintercept = 0, linewidth = 0.5, color = "grey40") +
+  scale_fill_manual(values = c("FALSE" = "#5baae2", "TRUE" = "#e84949")) +
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01)) +
+  labs(
+    title = "Graf 6: Sharpeho pomer tried aktív a portfólia",
+    x     = NULL,
+    y     = paste0("Sharpeho pomer  (Rf = ", Rf * 100, " %)")
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    panel.border    = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line       = element_blank(),
+    plot.title      = element_text(size = 12, face = "bold", margin = margin(b = 10)),
+    axis.text       = element_text(size = 10),
+    axis.text.x     = element_text(angle = 15, hjust = 1)
+  )
+```
+
+## Graf 7: Efektívna hranica
+
+```{r efficient-frontier, fig.width=8, fig.height=6}
+
+set.seed(42)
+n_rand <- 4000
+
+rand_ret    <- numeric(n_rand)
+rand_sd     <- numeric(n_rand)
+rand_sharpe <- numeric(n_rand)
+
+for (i in seq_len(n_rand)) {
+  w_raw    <- runif(n)
+  # Rešpektujeme horné ohraničenia
+  w_raw[3] <- w_raw[3] * upper_bounds["equity"]
+  w_raw[4] <- w_raw[4] * upper_bounds["gold"]
+  w        <- w_raw / sum(w_raw)
+
+  r_p          <- sum(w * mu)
+  s_p          <- as.numeric(sqrt(t(w) %*% cov_annual %*% w))
+  rand_ret[i]  <- r_p
+  rand_sd[i]   <- s_p
+  rand_sharpe[i] <- (r_p - Rf) / s_p
+}
+
+frontier_df <- tibble(ret = rand_ret, sd = rand_sd, sharpe = rand_sharpe)
+
+ggplot(frontier_df, aes(x = sd, y = ret, color = sharpe)) +
+  geom_point(alpha = 0.4, size = 0.8) +
+  geom_point(aes(x = port_sd, y = port_return),
+             color = "red", shape = 18, size = 5, inherit.aes = FALSE) +
+  annotate("text", x = port_sd + 0.003, y = port_return + 0.004,
+           label = "Navrhované\nportfólio", color = "red", size = 3.5, hjust = 0) +
+  scale_color_viridis_c(name = "Sharpe", option = "C") +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  labs(
+    title    = "Graf 7: Efektívna hranica – pozícia navrhovaného portfólia",
+    subtitle = paste0("4 000 náhodných portfólií | farebná škála = Sharpeho pomer | Rf = ",
+                      Rf * 100, " %"),
+    x = "Anualizovaná volatilita (σ)",
+    y = "Anualizovaný očakávaný výnos"
+  ) +
+  theme_classic() +
+  theme(
+    panel.border  = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line     = element_blank(),
+    plot.title    = element_text(size = 12, face = "bold", margin = margin(b = 4)),
+    plot.subtitle = element_text(size = 10, color = "grey40"),
+    axis.text     = element_text(size = 10)
+  )
+```
+
+# Choleského dekompozícia
+
+Choleského dekompozícia $\Sigma = LL^T$ umožňuje preniesť historickú
+korelačnú štruktúru aktív do Monte Carlo simulácie. Nezávislé normálne
+šoky $Z$ sa transformujú na korelované šoky $Y = L \cdot Z$.
+
+```{r cholesky}
+
+L <- t(chol(cov_annual))
+cat("--- Choleského faktor L (dolná trojuholníková matica) ---\n")
+print(round(L, 6))
+```
+
+# Monte Carlo simulácia (GBM, 5 000 scenárov)
+
+Geometrický Brownov pohyb:
+$\ln\frac{S_{t+1}}{S_t} = \left(\mu_i - \frac{1}{2}\sigma_i^2\right)\Delta t + \varepsilon_i\sqrt{\Delta t}$,
+kde $\varepsilon \sim N(0, \Sigma)$ generované Choleského dekompozíciou.
+
+**Predpoklady:** mesačné rebalansingna Markowitzove váhy, mesačný
+príspevok 500 € na konci každého mesiaca, poplatky a dane zanedbané.
+
+```{r monte-carlo}
+
+# Parametre (Tabuľka 3 + 5 seminarky)
+initial <- 10000      # Štartovacia jednorazová investícia (€)
+monthly <- 500        # Mesačný príspevok (€)
+years   <- 15         # Investičný horizont (roky)
+steps   <- years * 12 # Počet mesačných krokov (180)
+n_sims  <- 5000       # Počet Monte Carlo scenárov
+
+set.seed(420)         # Reprodukovateľnosť (set.seed(420) ako v seminarke)
+
+n_assets <- length(asset_order)
+dt       <- 1 / 12
+
+# GBM drift na jeden mesačný krok
+sigma2 <- diag(cov_annual)
+drift  <- (mu - 0.5 * sigma2) * dt
+
+# Choleského faktor pre mesačné šoky
+L_month <- t(chol(cov_annual))
+
+# Uloženie trajektórií
+portfolio_paths <- matrix(NA, nrow = steps + 1, ncol = n_sims)
+portfolio_paths[1, ] <- initial
+
+terminal_values <- numeric(n_sims)
+
+for (sim in seq_len(n_sims)) {
+  V            <- initial
+  asset_values <- V * weights          # Počiatočná alokácia podľa Markowitzových váh
+
+  for (t in seq_len(steps)) {
+    z         <- rnorm(n_assets)
+    shock     <- L_month %*% z         # Korelované šoky (Choleského)
+    log_ret_t <- drift + as.vector(shock) * sqrt(dt)
+    asset_values <- asset_values * exp(log_ret_t)
+    V         <- sum(asset_values) + monthly   # Výnos + mesačný príspevok
+    asset_values <- V * weights                # Rebalansing
+    portfolio_paths[t + 1, sim] <- V
+  }
+
+  terminal_values[sim] <- V
+}
+
+# Výstupné štatistiky (Tabuľka 5 seminarky)
+total_invested  <- initial + monthly * steps
+mean_tv         <- mean(terminal_values)
+median_tv       <- median(terminal_values)
+sd_tv           <- sd(terminal_values)
+q05             <- quantile(terminal_values, 0.05)
+q25             <- quantile(terminal_values, 0.25)
+q75             <- quantile(terminal_values, 0.75)
+q95             <- quantile(terminal_values, 0.95)
+q_max           <- max(terminal_values)
+q_min           <- min(terminal_values)
+prob_profit     <- mean(terminal_values > total_invested)
+
+cat("--- Tabuľka 5: Výsledky Monte Carlo simulácie po 15 rokoch ---\n")
+cat(sprintf("Celkovo investovaná suma          : %10.0f EUR\n", total_invested))
+cat(sprintf("Priemerná konečná hodnota (mean)  : %10.0f EUR\n", mean_tv))
+cat(sprintf("Mediánová konečná hodnota         : %10.0f EUR\n", median_tv))
+cat(sprintf("Smerodajná odchýlka               : %10.0f EUR\n", sd_tv))
+cat(sprintf("5. percentil  (pesimistický)       : %10.0f EUR\n", q05))
+cat(sprintf("25. percentil                     : %10.0f EUR\n", q25))
+cat(sprintf("75. percentil                     : %10.0f EUR\n", q75))
+cat(sprintf("95. percentil (optimistický)       : %10.0f EUR\n", q95))
+cat(sprintf("Maximálna simulovaná hodnota       : %10.0f EUR\n", q_max))
+cat(sprintf("Minimálna simulovaná hodnota       : %10.0f EUR\n", q_min))
+cat(sprintf("P(konečná hodnota > investovaná)  : %10.1f %%\n",  prob_profit * 100))
+```
+
+## Graf 8: Monte Carlo – trajektórie hodnoty portfólia
+
+```{r mc-paths, fig.width=9, fig.height=5}
+
+sim_df <- as_tibble(portfolio_paths) %>%
+  mutate(month = 0:steps) %>%
+  pivot_longer(-month, names_to = "sim", values_to = "value") %>%
+  mutate(year = month / 12)
+
+set.seed(123)
+sample_sims <- sample(unique(sim_df$sim), 50)
+
+# Skutočná mediánová dráha (medián každého mesačného reza zo všetkých 5 000 simulácií)
+median_path_df <- tibble(
+  year  = (0:steps) / 12,
+  value = apply(portfolio_paths, 1, median, na.rm = TRUE)
+)
+
+# Simulácia najbližšia k mediánovej terminálnej hodnote
+closest_idx <- which.min(abs(terminal_values - median_tv))
+closest_col <- paste0("V", closest_idx)
+closest_df  <- sim_df %>% dplyr::filter(sim == closest_col)
+
+sim_df %>%
+  dplyr::filter(sim %in% sample_sims, sim != closest_col) %>%
+  ggplot(aes(x = year, y = value, group = sim)) +
+  geom_line(color = "grey65", alpha = 0.35, linewidth = 0.5) +
+  geom_line(
+    data = median_path_df,
+    aes(x = year, y = value, group = 1, color = "Medián"),
+    linewidth = 0.9, inherit.aes = FALSE
+  ) +
+  geom_line(
+    data = closest_df,
+    aes(x = year, y = value, group = sim, color = "Simulácia najbližšia k mediánu"),
+    linewidth = 0.9, inherit.aes = FALSE
+  ) +
+  scale_color_manual(
+    name   = NULL,
+    values = c("Medián" = "dodgerblue2",
+               "Simulácia najbližšia k mediánu" = "red")
+  ) +
+  scale_x_continuous(breaks = 0:15, limits = c(0, 15), expand = c(0, 0)) +
+  scale_y_continuous(
+    limits = c(initial, 260000), expand = c(0, 0),
+    labels = scales::label_number(scale = 1e-3, suffix = "K")
+  ) +
+  labs(
+    title = "Graf 8: Monte Carlo simulácia – trajektórie hodnoty portfólia (5 000 scenárov)",
+    subtitle = "Modrá = mediánová dráha | Červená = simulácia najbližšia k mediánu",
+    x = "Rok",
+    y = "Hodnota portfólia (EUR)"
+  ) +
+  theme_classic() +
+  theme(
+    legend.position  = "bottom",
+    panel.border     = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line        = element_blank(),
+    plot.title       = element_text(size = 11, face = "bold", margin = margin(b = 4)),
+    plot.subtitle    = element_text(size = 9, color = "grey40"),
+    axis.text        = element_text(size = 10),
+    axis.title       = element_text(size = 11)
+  )
+```
+
+## Graf 9: Distribúcia konečných hodnôt po 15 rokoch
+
+```{r mc-terminal-dist, fig.width=8, fig.height=5}
+
+tibble(value = terminal_values) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 60,
+                 fill = "#5baae2", color = "white", alpha = 0.8, linewidth = 0.2) +
+  geom_density(color = "navy", linewidth = 0.9) +
+  geom_vline(xintercept = median_tv,      color = "dodgerblue2", linetype = "solid",  linewidth = 1.0) +
+  geom_vline(xintercept = q05,            color = "red",         linetype = "dashed", linewidth = 0.8) +
+  geom_vline(xintercept = q95,            color = "darkgreen",   linetype = "dashed", linewidth = 0.8) +
+  geom_vline(xintercept = total_invested, color = "black",       linetype = "dotted", linewidth = 0.8) +
+  annotate("text", x = median_tv + 1200, y = Inf, vjust = 2,
+           label = sprintf("Medián\n%.0f €", median_tv),
+           color = "dodgerblue2", size = 3.2, hjust = 0) +
+  annotate("text", x = q05 - 1200, y = Inf, vjust = 2,
+           label = sprintf("5. pct\n%.0f €", q05),
+           color = "red", size = 3.2, hjust = 1) +
+  annotate("text", x = q95 + 1200, y = Inf, vjust = 2,
+           label = sprintf("95. pct\n%.0f €", q95),
+           color = "darkgreen", size = 3.2, hjust = 0) +
+  scale_x_continuous(labels = scales::label_number(scale = 1e-3, suffix = "K", prefix = "€")) +
+  labs(
+    title    = "Graf 9: Distribúcia konečných hodnôt portfólia po 15 rokoch (n = 5 000 simulácií)",
+    subtitle = sprintf("Modrá = medián  |  Červená = 5. pct  |  Zelená = 95. pct  |  Čiarkovaná = investovaná suma (%.0f €)",
+                       total_invested),
+    x = "Konečná hodnota portfólia (€)",
+    y = "Hustota"
+  ) +
+  theme_classic() +
+  theme(
+    panel.border  = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line     = element_blank(),
+    plot.title    = element_text(size = 11, face = "bold", margin = margin(b = 4)),
+    plot.subtitle = element_text(size = 9, color = "grey40"),
+    axis.text     = element_text(size = 10)
+  )
+```
+
+# Tabuľka 6: Value at Risk a Conditional VaR
+
+VaR a CVaR sú vypočítané z **mesačných výnosov všetkých krokov Monte
+Carlo simulácie** (5 000 scenárov × 180 mesiacov = 900 000 mesačných
+výnosov).
+
+CVaR (Expected Shortfall) je priemer strát, ktoré prekračujú VaR —
+koherentnejšia a konzervatívnejšia miera rizika (Artzner et al., 1999).
+
+```{r var-cvar, fig.width=8, fig.height=4}
+
+# Mesačné výnosy zo všetkých MC krokov
+mc_ret_vec <- as.vector(
+  diff(portfolio_paths) / portfolio_paths[-nrow(portfolio_paths), ]
+)
+mc_ret_vec <- mc_ret_vec[is.finite(mc_ret_vec)]
+
+calc_var_cvar <- function(r, conf) {
+  v <- quantile(r, 1 - conf)
+  list(var = v, cvar = mean(r[r <= v]))
+}
+
+conf_levels <- c(0.90, 0.95, 0.99)
+
+cat("--- Tabuľka 6: VaR a CVaR portfólia ---\n")
+cat(sprintf("%-24s %14s %15s %22s\n",
+            "Hladina spoľahlivosti", "VaR (mes.)", "CVaR (mes.)", "VaR (ročný, √12)"))
+cat(strrep("-", 78), "\n")
+for (cl in conf_levels) {
+  vc <- calc_var_cvar(mc_ret_vec, cl)
+  cat(sprintf("%-24s %13.2f %% %14.2f %% %21.2f %%\n",
+              paste0(cl * 100, " %"),
+              vc$var  * 100,
+              vc$cvar * 100,
+              vc$var  * sqrt(12) * 100))
+}
+
+# Vizualizácia
+vc95 <- calc_var_cvar(mc_ret_vec, 0.95)
+
+tibble(ret = mc_ret_vec) %>%
+  dplyr::filter(ret > -0.10, ret < 0.10) %>%
+  ggplot(aes(x = ret)) +
+  geom_histogram(aes(y = after_stat(density)), bins = 100,
+                 fill = "#5baae2", color = "white", alpha = 0.75, linewidth = 0.1) +
+  geom_density(color = "navy", linewidth = 0.8) +
+  geom_vline(xintercept = vc95$var,  color = "red",    linetype = "dashed", linewidth = 0.9) +
+  geom_vline(xintercept = vc95$cvar, color = "orange", linetype = "dotted", linewidth = 0.9) +
+  annotate("text", x = vc95$var - 0.002, y = Inf, vjust = 2,
+           label = sprintf("VaR 95%%\n%.2f %%", vc95$var * 100),
+           color = "red", size = 3.5, hjust = 1) +
+  annotate("text", x = vc95$cvar - 0.002, y = Inf, vjust = 4,
+           label = sprintf("CVaR 95%%\n%.2f %%", vc95$cvar * 100),
+           color = "orange", size = 3.5, hjust = 1) +
+  scale_x_continuous(labels = scales::percent_format(accuracy = 0.1)) +
+  labs(
+    title = "Distribúcia mesačných výnosov z Monte Carlo – VaR a CVaR (95 %)",
+    x     = "Mesačný výnos",
+    y     = "Hustota"
+  ) +
+  theme_classic() +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    axis.line    = element_blank(),
+    plot.title   = element_text(size = 11, face = "bold")
+  )
+```
+
+# Tabuľka 9: Zhrnutie kľúčových výsledkov
+
+```{r summary}
+
+vc99 <- calc_var_cvar(mc_ret_vec, 0.99)
+
+cat("========== Tabuľka 9: Zhrnutie kľúčových výsledkov analýzy ==========\n")
+cat(sprintf("%-42s %s\n",     "Ukazovateľ",                            "Výsledok"))
+cat(strrep("-", 65), "\n")
+cat(sprintf("%-42s %.2f %%\n", "Očakávaný výnos portfólia p.a.",       port_return * 100))
+cat(sprintf("%-42s %.2f %%\n", "Volatilita portfólia p.a. (σ)",         port_sd     * 100))
+cat(sprintf("%-42s %.3f\n",    "Sharpeho pomer",                        port_sharpe))
+cat(sprintf("%-42s %.0f EUR\n","Celkovo investovaná suma (15 r.)",       total_invested))
+cat(sprintf("%-42s %.0f EUR\n","Mediánová konečná hodnota portfólia",    median_tv))
+cat(sprintf("%-42s %.0f EUR\n","Zhodnotenie portfólia – medián",          median_tv - total_invested))
+cat(sprintf("%-42s %.0f %%\n", "P(konečná hodnota > investovaná)",       prob_profit * 100))
+cat(sprintf("%-42s %.2f %%\n", "VaR 99 % (mesačný)",                    vc99$var * 100))
+cat(sprintf("%-42s %.2f %%\n", "CVaR 99 % (mesačný)",                   vc99$cvar * 100))
+```
