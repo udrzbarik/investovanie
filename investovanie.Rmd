@@ -429,12 +429,12 @@ set.seed(123)
 n_sim <- 20000
 
 # Funkcia na generovanie náhodných váh s hornými limitmi
-generate_weights <- function(n, upper_bounds) {
+generate_weights <- function(n, upper_bounds, lower_bounds) {
   repeat {
-    w <- runif(n)
+    # Dirichlet via Gamma draws — much better coverage
+    w <- rgamma(n, shape = 0.5)   # shape < 1 pushes mass to extremes
     w <- w / sum(w)
-    
-    if (all(w <= upper_bounds)) {
+    if (all(w <= upper_bounds) && all(w >= lower_bounds)) {
       return(w)
     }
   }
@@ -443,7 +443,7 @@ generate_weights <- function(n, upper_bounds) {
 # Simulácie portfólií
 sim_weights <- replicate(
   n_sim,
-  generate_weights(n, upper_bounds)
+  generate_weights(n, upper_bounds, b_lower)
 )
 
 sim_returns <- apply(sim_weights, 2, function(w) sum(w * mu))
