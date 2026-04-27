@@ -151,6 +151,8 @@ portfolio <- bonds %>%
 
 Na stanovenie váh v rámci nášho portfólia využijeme Markowitzovú metódu mean-variance, ktorá nám na základe nášho cieľového (mean) výnosu pomocou kvadratickej optimalizácie vytvorí portfólio, ktoré bude mať najnižšiu možnú mieru rizika (varianciu).
 
+Portfólio vykazuje celkovo nízku až strednú úroveň korelácie medzi aktívami, pričom niektoré dvojice (najmä Akcie–REITs: 0.64) dosahujú vyššiu koreláciu, zatiaľ čo Zlato a TIPS plnia funkciu efektívnych diverzifikátorov s nízkou koreláciou voči ostatným aktívam.
+
 #### Deskriptívne štatistiky portfólia
 
 Každé aktívum je analyzované na základe maximálne dostupnej histórie, pričom kovariancie medzi aktívami sú odhadované z ich spoločného prekryvu dát.
@@ -342,7 +344,7 @@ n <- length(mu)
 
 # Constraints
 target_return <- 0.045
-Rf <- 0.0215
+Rf <- 0.03
 
 upper_bounds <- c(
   bonds  = 1,
@@ -375,12 +377,12 @@ b_eq <- c(
 # Lower / upper bounds
 A_lower <- diag(n)
 b_lower <- c(
-  0,
-  0,
-  0,
-  0,
-  0,
-  0.1
+  bonds  = 0,
+  com    = 0,
+  equity = 0,
+  gold   = 0,
+  reits  = 0,
+  tips   = 0.1
 )
 
 A_upper <- -diag(n)
@@ -419,7 +421,7 @@ cat(sprintf("Sharpe ratio (Rf=%.4f)  : %.4f\n", Rf, port_sharpe))
 
 ```
 
-```{r}
+```{r, fig.width=10, fig.height=5, fig.dpi=120}
 
 library(ggplot2)
 library(scales)
