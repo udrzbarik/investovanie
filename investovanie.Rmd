@@ -90,17 +90,15 @@ reits = fromJSON("./data/reits.json", flatten = TRUE) %>%
 # High Yield Corp Bonds (ETF) - bonds.csv
 # https://www.ishares.com/uk/individual/en/products/290618/ishares-high-yield-corp-bond-ucits-etf
 
-bonds = read_delim(
-  './data/bonds.csv',
-  delim = ';',
-  locale = locale(decimal_mark = ',')
-) %>% 
+bonds = fromJSON("./data/bonds.json", flatten = TRUE) %>%
   rename(
-    date = `As Of`,
-    value = NAV
+    value = `value.localized`,
   ) %>%
   select(date, value) %>%
-  mutate(date = parse_date_time(date, 'dmy'))
+  mutate(
+    value = as.numeric(value),
+    date = parse_date_time(date, "ymd")
+  )
 
 
 # Inflation Linked Govt Bond (ETF) - tips.csv
@@ -119,10 +117,10 @@ tips = read_delim(
   mutate(date = parse_date_time(date, 'dmy'))
 
 
-# Edge MSCI World Value Factor (ETF) - equity.json
-# https://www.justetf.com/en-be/etf-profile.html?isin=IE00BP3QZB59#overview
+# iShares Core MSCI World (ETF) - msci.json
+# https://www.justetf.com/en-be/etf-profile.html?isin=IE00B4L5Y983
 
-equity = fromJSON("./data/equity.json", flatten = TRUE) %>%
+equity = fromJSON("./data/msci.json", flatten = TRUE) %>%
   rename(
     value = `value.localized`,
   ) %>%
@@ -141,7 +139,7 @@ portfolio <- bonds %>%
   full_join(equity %>% select(date, equity_val = value), by = "date") %>%
   full_join(gold %>% select(date, gold_val = value), by = "date") %>%
   full_join(reits %>% select(date, reits_val = value), by = "date") %>%
-  filter(date >= as.Date("2014-10-01")) %>%   # Cutoff aby boli data +- z rovnakeho režimu
+  filter(date >= as.Date("2011-03-09")) %>%   # Cutoff aby boli data +- z rovnakeho režimu
   filter(wday(date, week_start = 1) <= 5) %>% # Vyfiltruje víkendy aby to neskresľovalo
   arrange(date)
 
@@ -343,15 +341,15 @@ mu <- stats %>%
 n <- length(mu)
 
 # Constraints
-target_return <- 0.045
+target_return <- 0.05
 Rf <- 0.03
 
 upper_bounds <- c(
   bonds  = 1,
-  com    = 0.2,
+  com    = 0.25,
   equity = 0.15,
-  gold   = 0.15,
-  reits  = 0.2,
+  gold   = 0.25,
+  reits  = 0.25,
   tips   = 1
 )
 
@@ -382,7 +380,7 @@ b_lower <- c(
   equity = 0,
   gold   = 0,
   reits  = 0,
-  tips   = 0.1
+  tips   = 0
 )
 
 A_upper <- -diag(n)
@@ -480,7 +478,7 @@ ggplot(sim_df, aes(x = sd, y = ret, color = sharpe)) +
     size = 2
   ) +
   scale_x_continuous(labels = percent_format(accuracy = 0.1)) +
-  scale_y_continuous(labels = percent_format(accuracy = 0.1)) +
+  scale_y_continuous(labels = percent_format(accuracy = 0.1), expand = expansion(mult = c(0.15, 0.15))) +
   scale_color_viridis_c(name = "Sharpe ratio") +
   labs(
     x = "Annualizovaná volatilita",
@@ -507,7 +505,7 @@ ggplot(sim_df, aes(x = sd, y = ret, color = sharpe)) +
   )
 ```
 
-```{r}
+```{r, fig.width=10, fig.height=5, fig.dpi=120}
 
 # ------------------------------------------------
 #       Výnosy single assets vs Portfolio
@@ -580,7 +578,7 @@ ggplot(cum_long, aes(x = date, y = cum_ret, color = label, linewidth = label, gr
   scale_alpha_manual(values = c("TRUE" = 1, "FALSE" = 0.4), guide = "none") +
   scale_y_continuous(
     labels = scales::percent_format(accuracy = 1),
-    limits = c(-0.45, 1.1),
+    limits = c(-0.75, 1.75),
     expand = expansion(mult = c(0.05, 0.05))
   ) +
   scale_x_date(
@@ -591,7 +589,7 @@ ggplot(cum_long, aes(x = date, y = cum_ret, color = label, linewidth = label, gr
   guides(color = guide_legend(nrow = 1, override.aes = list(linewidth = 2))) +
   labs(
     x     = NULL,
-    y     = "Kumulatívny log-výnos",
+    y     = "Kumulatívny výnos",
     color = NULL
   ) +
   theme_classic() +
@@ -761,7 +759,7 @@ cat(sprintf("95th percentile            : %.2f EUR\n", q95))
 
 ```
 
-```{r}
+```{r, fig.width=10, fig.height=5, fig.dpi=120}
 
 # -------------------------------
 #              Grafy
@@ -811,19 +809,19 @@ p_paths <- sim_df %>%
   ) +
   geom_line(
     data = median_df,
-    aes(x = year, y = value, color = "Median"),
+    aes(x = year, y = value, color = "Medián"),
     linewidth = .8
   ) +
   geom_line(
     data = median_path_df,
-    aes(x = year, y = value, color = "Closest simulation to median"),
+    aes(x = year, y = value, color = "Najblizsia simulácia k mediánu"),
     linewidth = .8
   ) +
   scale_color_manual(
     name = NULL,
     values = c(
-      "Closest simulation to median" = "red",
-      "Median" = "dodgerblue2"
+      "Najblizsia simulácia k mediánu" = "red",
+      "Medián" = "dodgerblue2"
     )
   ) +
   scale_x_continuous(
@@ -832,7 +830,7 @@ p_paths <- sim_df %>%
       expand = c(0, 0)
   ) +
   scale_y_continuous(
-    limits = c(initial, 250000),
+    limits = c(initial, 200000),
     expand = c(0, 0),
     labels = scales::label_number(scale = 1e-3, suffix = "K")
   ) +
